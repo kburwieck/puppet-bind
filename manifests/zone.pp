@@ -22,7 +22,7 @@ define bind::zone (
   $allow_update  = [],
   $zone_ttl      = '',
   $zone_contact  = '',
-  $zone_serial   = '',
+  $zone_serial   = '%%SERIAL%%',
   $zone_refresh  = '3h',
   $zone_retry    = '1h',
   $zone_expiracy = '1w',
@@ -75,7 +75,6 @@ define bind::zone (
         require => Package['bind9'],
       }
 
-
       if $is_slave {
         Concat::Fragment["bind.zones.${name}"] {
           content => template('bind/zone-slave.erb'),
@@ -87,7 +86,16 @@ define bind::zone (
         validate_re($zone_serial, '^\d+$', "Wrong serial value for ${name}!")
         validate_re($zone_ttl, '^\d+$', "Wrong ttl value for ${name}!")
 
+        file { "/etc/bind/tmp":
+          ensure => directory
+        }
+
         $conf_file = $is_dynamic? {
+          true    => "/etc/bind/tmp/dynamic_${name}.conf",
+          default => "/etc/bind/tmp/pri_${name}.conf",
+        }
+
+        $conf_real_file = $is_dynamic? {
           true    => "/etc/bind/dynamic/${name}.conf",
           default => "/etc/bind/pri/${name}.conf",
         }
@@ -101,8 +109,9 @@ define bind::zone (
           owner   => root,
           group   => bind,
           mode    => '0664',
-          notify  => Exec['reload bind9'],
-          require => Package['bind9'],
+          #notify  => Exec['reload bind9'],
+	  notify  => Exec["Replace SERIAL ${conf_file}"],
+          require => [File['/etc/bind/tmp'], Package['bind9']],
         }
 
         Concat::Fragment["bind.zones.${name}"] {
@@ -116,8 +125,19 @@ define bind::zone (
           require => $require,
         }
 
+        file { $conf_real_file:
+          ensure => $ensure
+        }
+
         file {"/etc/bind/pri/${name}.conf.d":
           ensure  => absent,
+        }
+
+        exec { "Replace SERIAL ${conf_file}":
+          path        => '/bin:/sbin:/usr/sbin:/usr/bin',
+          command     => "sed \"s/%%SERIAL%%/`date +%s`/g\" ${conf_file} > ${conf_real_file}",
+          notify      => Exec['reload bind9'],
+          refreshonly => true
         }
       }
     }
